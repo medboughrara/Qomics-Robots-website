@@ -8,7 +8,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "BamBot",
+  title: "Qomics-Robots",
   description: "Make it easy to play with robots 🤖",
 };
 

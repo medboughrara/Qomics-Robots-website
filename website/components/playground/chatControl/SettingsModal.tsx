@@ -10,6 +10,8 @@ import {
   getModelFromLocalStorage,
   setModelToLocalStorage,
 } from "../../../lib/chatSettings";
+const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const NVIDIA_MODEL = "nvidia/nemotron-voicechat";
 
 interface SettingsModalProps {
   show: boolean;
@@ -30,9 +32,8 @@ export function SettingsModal({
   const [baseURL, setBaseURLState] = useState("");
   const [systemPrompt, setSystemPromptState] = useState("");
   const [model, setModelState] = useState("");
-
-  type ModelType = "OpenAI" | "Ollama" | "Custom";
-  const [modelType, setModelType] = useState<ModelType>("OpenAI");
+  type ModelType = "NVIDIA" | "OpenAI" | "Ollama" | "Custom";
+  const [modelType, setModelType] = useState<ModelType>("NVIDIA");
   const [showUseDefaultPrompt, setShowUseDefaultPrompt] = useState(false);
 
   // Auto-detect type and set recommended defaults
@@ -40,18 +41,18 @@ export function SettingsModal({
     if (show) {
       const base = getBaseURLFromLocalStorage();
       setApiKeyState(getApiKeyFromLocalStorage());
-      if (
-        base === "https://api.openai.com/v1/" ||
-        base === "" ||
-        base == null
-      ) {
+      if (base === NVIDIA_BASE_URL || base === "" || base == null) {
+        setModelType("NVIDIA");
+        setBaseURLState(NVIDIA_BASE_URL);
+        setModelState(getModelFromLocalStorage() || NVIDIA_MODEL);
+      } else if (base === "https://api.openai.com/v1/") {
         setModelType("OpenAI");
         setBaseURLState("https://api.openai.com/v1/");
         setModelState(getModelFromLocalStorage() || "gpt-4.1-nano");
       } else if (base === "http://localhost:11434/v1") {
         setModelType("Ollama");
         setBaseURLState("http://localhost:11434/v1");
-        setModelState(getModelFromLocalStorage() || "mistral-small3.1");
+        setModelState(getModelFromLocalStorage() || "phi3:latest");
       } else {
         setModelType("Custom");
         setBaseURLState(base);
@@ -72,7 +73,10 @@ export function SettingsModal({
   // When switching LLM type, only change Base URL, keep other values unchanged
   const handleModelTypeChange = (type: ModelType) => {
     setModelType(type);
-    if (type === "OpenAI") {
+    if (type === "NVIDIA") {
+      setBaseURLState(NVIDIA_BASE_URL);
+      setModelState(NVIDIA_MODEL);
+    } else if (type === "OpenAI") {
       setBaseURLState("https://api.openai.com/v1/");
     } else if (type === "Ollama") {
       setBaseURLState("http://localhost:11434/v1");
@@ -123,6 +127,7 @@ export function SettingsModal({
             onChange={(e) => handleModelTypeChange(e.target.value as ModelType)}
             className="p-1 rounded bg-zinc-700 text-white outline-none text-base font-semibold ml-4"
           >
+            <option value="NVIDIA">NVIDIA</option>
             <option value="OpenAI">OpenAI</option>
             <option value="Ollama">Ollama</option>
             <option value="Custom">Custom</option>
@@ -130,6 +135,21 @@ export function SettingsModal({
         </div>
         {/* LLM description */}
         <div className="mb-2 text-xs text-zinc-300 text-right">
+          {modelType === "NVIDIA" && (
+            <>
+              Use your NVIDIA Build API key from
+              <a
+                href="https://build.nvidia.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline text-blue-300 ml-1"
+              >
+                https://build.nvidia.com/
+              </a>
+              .<br />
+              Recommended defaults are prefilled for Nemotron VoiceChat.
+            </>
+          )}
           {modelType === "OpenAI" && (
             <>
               Get your OpenAI API key at
@@ -167,7 +187,13 @@ export function SettingsModal({
             type="text"
             value={apiKey}
             onChange={(e) => setApiKeyState(e.target.value)}
-            placeholder={modelType === "Ollama" ? "" : "sk-..."}
+            placeholder={
+              modelType === "Ollama"
+                ? ""
+                : modelType === "NVIDIA"
+                ? "nvapi-..."
+                : "sk-..."
+            }
             className="flex-1 p-2 rounded bg-zinc-700 text-white outline-none"
           />
         </div>
@@ -181,7 +207,9 @@ export function SettingsModal({
             value={baseURL}
             onChange={(e) => setBaseURLState(e.target.value)}
             placeholder={
-              modelType === "OpenAI"
+              modelType === "NVIDIA"
+                ? NVIDIA_BASE_URL
+                : modelType === "OpenAI"
                 ? "Not required"
                 : modelType === "Ollama"
                 ? "http://localhost:11434/v1"
@@ -200,8 +228,10 @@ export function SettingsModal({
             value={model}
             onChange={(e) => setModelState(e.target.value)}
             placeholder={
-              modelType === "Ollama"
-                ? "mistral-small3.1"
+              modelType === "NVIDIA"
+                ? NVIDIA_MODEL
+                : modelType === "Ollama"
+                ? "phi3:latest"
                 : modelType === "OpenAI"
                 ? "gpt-4.1-nano"
                 : ""

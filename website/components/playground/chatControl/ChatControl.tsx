@@ -13,12 +13,19 @@ import {
 } from "../../../lib/chatSettings";
 import useMeasure from "react-use-measure";
 import { panelStyle } from "@/components/playground/panelStyle";
+const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const NVIDIA_MODEL = "nvidia/nemotron-voicechat";
 
 type ChatControlProps = {
   robotName?: string;
   systemPrompt?: string;
   onHide: () => void;
   show?: boolean; // 新增 show 属性
+};
+type MovementAction = {
+  key: string;
+  duration: number;
+  description: string;
 };
 
 export function ChatControl({
@@ -34,16 +41,22 @@ export function ChatControl({
   );
   const [showSettings, setShowSettings] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isListening, setIsListening] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isKokoroReady, setIsKokoroReady] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const ttsRef = useRef<any>(null);
 
   const apiKey = getApiKeyFromLocalStorage();
-  const baseURL = getBaseURLFromLocalStorage() || "https://api.openai.com/v1/";
-  const model = getModelFromLocalStorage() || "gpt-4.1-nano";
+  const baseURL = getBaseURLFromLocalStorage() || NVIDIA_BASE_URL;
+  const model = getModelFromLocalStorage() || NVIDIA_MODEL;
   const systemPrompt =
     getSystemPromptFromLocalStorage(robotName) ||
     configSystemPrompt || // <-- Use configSystemPrompt if present
-    `You can help control a robot by pressing keyboard keys. Use the keyPress tool to simulate key presses. Each key will be held down for 1 second by default. If the user describes roughly wanting to make it longer or shorter, adjust the duration accordingly.`;
+    `You are a helpful, realistic robot assistant. You can help control a robot by pressing keyboard keys. Use the keyPress tool to simulate key presses. Each key will be held down for 1 second by default. If the user describes roughly wanting to make it longer or shorter, adjust the duration accordingly. Keep your responses conversational, natural, and friendly, like a real robot-human conversation. Be concise and conversational, acknowledging the commands gracefully.`;
 
   // Create openai instance with current apiKey and baseURL
   const openai = createOpenAI({
@@ -66,10 +79,196 @@ export function ChatControl({
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages]);
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadKokoro = async () => {
+      try {
+        const { KokoroTTS } = await import("kokoro-js");
+        const tts = await KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", { dtype: "fp32" });
+        if (isMounted) {
+          ttsRef.current = tts;
+          setIsKokoroReady(true);
+        }
+      } catch (err) {
+        console.error("Failed to load Kokoro TTS:", err);
+      }
+    };
+    if (typeof window !== "undefined") {
+      loadKokoro();
+    }
+    
+    setMounted(true);
+    
+    return () => { isMounted = false; };
+  }, []);
+
+  const simulateKeyPress = async (key: string, duration = 1000) => {
+    const keydownEvent = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+    });
+    window.dispatchEvent(keydownEvent);
+    await new Promise((resolve) => setTimeout(resolve, duration));
+    const keyupEvent = new KeyboardEvent("keyup", {
+      key,
+      bubbles: true,
+    });
+    window.dispatchEvent(keyupEvent);
+  };
+
+  const speakText = async (text: string, onReady?: () => void) => {
+    if (isMuted || typeof window === "undefined") {
+      if (onReady) onReady();
+      return;
+    }
+    
+    // Strip out Markdown or symbols for cleaner speech
+    const cleanText = text.replace(/[*_#`~]/g, "");
+
+    if (ttsRef.current) {
+      try {
+        const audio = await ttsRef.current.generate(cleanText, { voice: "af_heart" });
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const audioBuffer = audioContext.createBuffer(1, audio.audio.length, audio.sampling_rate);
+        audioBuffer.getChannelData(0).set(audio.audio);
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+        if (onReady) onReady();
+        source.start();
+        return;
+      } catch (e) {
+        console.error("Kokoro TTS playback failed:", e);
+      }
+    }
+    
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = "en-US";
+      utterance.rate = 1.0;
+      if (onReady) {
+        utterance.onstart = () => onReady();
+      }
+      window.speechSynthesis.speak(utterance);
+      if (!onReady) return; // Fallback if no callback needed
+    } else {
+      if (onReady) onReady();
+    }
+  };
+
+  const extractDurationMs = (command: string) => {
+    const secondsMatch = command
+      .toLowerCase()
+      .match(/(\d+(?:\.\d+)?)\s*(seconds?|secs?|s)\b/);
+    if (secondsMatch?.[1]) {
+      const seconds = Number(secondsMatch[1]);
+      if (!Number.isNaN(seconds)) {
+        return Math.max(100, Math.min(5000, Math.round(seconds * 1000)));
+      }
+    }
+
+    const msMatch = command.toLowerCase().match(/(\d+)\s*(milliseconds?|ms)\b/);
+    if (msMatch?.[1]) {
+      const ms = Number(msMatch[1]);
+      if (!Number.isNaN(ms)) {
+        return Math.max(100, Math.min(5000, Math.round(ms)));
+      }
+    }
+
+    return 1000;
+  };
+
+  const getSimpleMovementActions = (command: string): MovementAction[] => {
+    const normalized = command.toLowerCase();
+    const duration = extractDurationMs(normalized);
+    const actions: MovementAction[] = [];
+    const seenKeys = new Set<string>();
+
+    const mappings: {
+      patterns: RegExp[];
+      key: string;
+      description: string;
+    }[] = [
+      { patterns: [/\b(rotate|turn|move)\s+left\b/, /\bleft\b/], key: "q", description: "rotate left" },
+      { patterns: [/\b(rotate|turn|move)\s+right\b/, /\bright\b/], key: "1", description: "rotate right" },
+      { patterns: [/\b(look|move)\s+up\b/, /\bjaw\s+up\b/, /\bup\b/, /\barm\s+up\b/], key: "8", description: "move robot up" },
+      { patterns: [/\b(look|move)\s+down\b/, /\bjaw\s+down\b/, /\bdown\b/, /\barm\s+down\b/], key: "i", description: "move robot down" },
+      { patterns: [/\bforward\b/], key: "o", description: "move robot forward" },
+      { patterns: [/\bbackward\b/, /\bback\b/], key: "u", description: "move robot backward" },
+      { patterns: [/\bopen\b/, /\bopen\s+(jaw|gripper|creeper|group|robot|arm)\b/], key: "6", description: "open robot" },
+      { patterns: [/\bclose\b/, /\bclose\s+(jaw|gripper|creeper|group|robot|arm)\b/], key: "y", description: "close robot" },
+    ];
+
+    mappings.forEach((mapping) => {
+      if (
+        mapping.patterns.some((pattern) => pattern.test(normalized)) &&
+        !seenKeys.has(mapping.key)
+      ) {
+        seenKeys.add(mapping.key);
+        actions.push({
+          key: mapping.key,
+          duration,
+          description: mapping.description,
+        });
+      }
+    });
+
+    return actions;
+  };
 
   const handleCommand = async (command: string) => {
     setMessages((prev) => [...prev, { sender: "User", text: command }]);
     try {
+      const simpleActions = getSimpleMovementActions(command);
+      if (simpleActions.length > 0) {
+        const actionDescriptions = simpleActions
+          .map((action) => action.description)
+          .join(" and ");
+        
+        const interactiveResponses = [
+          `I'm on it! I've executed the command to ${actionDescriptions}.`,
+          `Sure thing! Moving to ${actionDescriptions} now.`,
+          `Consider it done. I just performed the ${actionDescriptions} action.`,
+          `Got it! Executing ${actionDescriptions} right away.`,
+          `Alright, I am processing the ${actionDescriptions} command.`
+        ];
+        const aiResponse = interactiveResponses[Math.floor(Math.random() * interactiveResponses.length)];
+          
+        setMessages((prev) => [
+          ...prev,
+          { sender: "AI", text: aiResponse },
+        ]);
+        
+        // Trigger voice synthesis and execute movements exactly when audio is ready
+        const executeMovements = async () => {
+          for (const action of simpleActions) {
+            await simulateKeyPress(action.key, action.duration);
+          }
+        };
+
+        speakText(aiResponse, executeMovements);
+
+        return;
+      }
+
+      if (!apiKey) {
+        setShowSettings(true);
+        const errorMsg = "Set your NVIDIA API key in Settings for advanced AI command interpretation.";
+        setMessages((prev) => [...prev, { sender: "AI", text: errorMsg }]);
+        speakText(errorMsg);
+        return;
+      }
       const result = await generateText({
         model: openai(model),
         prompt: command,
@@ -102,21 +301,7 @@ export function ChatControl({
               duration?: number;
             }) => {
               const holdTime = duration ?? 1000;
-              const keydownEvent = new KeyboardEvent("keydown", {
-                key,
-                bubbles: true,
-              });
-              window.dispatchEvent(keydownEvent);
-
-              // Wait for the specified duration
-              await new Promise((resolve) => setTimeout(resolve, holdTime));
-
-              // Simulate keyup event
-              const keyupEvent = new KeyboardEvent("keyup", {
-                key,
-                bubbles: true,
-              });
-              window.dispatchEvent(keyupEvent);
+              await simulateKeyPress(key, holdTime);
               return `Held key "${key.toUpperCase()}" for ${holdTime} ms`;
             },
           }),
@@ -128,21 +313,68 @@ export function ChatControl({
         text += `\n\n${element.result}`;
       }
       setMessages((prev) => [...prev, { sender: "AI", text }]);
+      speakText(text);
     } catch (error) {
-      console.error("Error generating text:", error);
+      console.warn("Error generating text:", error);
+      const errorMsg = "Error: Unable to process your request.";
+      setMessages((prev) => [...prev, { sender: "AI", text: errorMsg }]);
+      speakText(errorMsg);
+    }
+  };
+  const handleVoiceInput = () => {
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
       setMessages((prev) => [
         ...prev,
-        { sender: "AI", text: "Error: Unable to process your request." },
+        {
+          sender: "AI",
+          text: "Voice input is not supported in this browser.",
+        },
       ]);
+      return;
     }
+
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    recognition.lang = "en-US";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => setIsListening(true);
+
+    recognition.onerror = (event: any) => {
+      setIsListening(false);
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "AI",
+          text: `Voice input error: ${event?.error || "unknown error"}`,
+        },
+      ]);
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results?.[0]?.[0]?.transcript?.trim();
+      if (!transcript) return;
+      setInput(transcript);
+      handleCommand(transcript);
+    };
+
+    recognition.onend = () => setIsListening(false);
+
+    recognition.start();
   };
 
   const handleSend = () => {
     if (input.trim()) {
-      if (!apiKey) {
-        setShowSettings(true);
-        return;
-      }
       handleCommand(input.trim());
       setInput(""); // Clear input after sending
     }
@@ -153,6 +385,8 @@ export function ChatControl({
       handleSend();
     }
   };
+
+  if (!mounted) return null;
 
   return (
     <Rnd
@@ -209,8 +443,44 @@ export function ChatControl({
         <div className="flex items-center space-x-2">
           <div className="relative flex items-center w-full">
             <button
-              onClick={() => alert("Camera support coming soon")}
-              className="absolute left-0 bg-zinc-700 hover:bg-zinc-600 text-zinc-400 p-2 rounded"
+              onClick={() => setIsMuted(!isMuted)}
+              className={`absolute left-0 p-2 rounded ${
+                isMuted
+                  ? "bg-red-700 hover:bg-red-600 text-white"
+                  : "bg-zinc-700 hover:bg-zinc-600 text-zinc-400"
+              }`}
+              title={isMuted ? "Unmute AI Voice" : "Mute AI Voice"}
+              style={{ zIndex: 10 }}
+            >
+              {isMuted ? (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  className="w-5 h-5"
+                >
+                  <path d="M5.88909 3.06066L20.0312 17.2028L18.617 18.617L15.3406 15.3406C14.3912 16.3262 13.2505 17.078 12 17.4878V21H10V17.4878C6.91898 16.6433 4.5 13.8821 4.5 10.5V9H6.5V10.5C6.5 13.1166 8.35122 15.2892 10.8252 15.7001L7.26257 12.1374C6.79375 11.7583 6.5 11.1643 6.5 10.5V7.5L5.88909 6.88909L4.47487 5.47487L5.88909 3.06066ZM12 3C13.6569 3 15 4.34315 15 6V10.5C15 10.9859 14.8841 11.4447 14.6784 11.8532L13.1797 10.3546C13.0645 10.1557 13 9.9238 13 9.68367V6C13 5.44772 12.5523 5 12 5C11.4477 5 11 5.44772 11 6V8.17492L9.08053 6.25545C9.37365 4.41724 10.5594 3 12 3ZM19.5 10.5V9H17.5V10.5C17.5 11.7766 17.0425 12.9463 16.2736 13.8569L17.754 15.3372C18.8402 14.0768 19.5 12.3688 19.5 10.5Z"></path>
+                </svg>
+              ) : (
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  className="w-5 h-5"
+                >
+                  <path d="M13 3C14.6569 3 16 4.34315 16 6V11C16 12.6569 14.6569 14 13 14C11.3431 14 10 12.6569 10 11V6C10 4.34315 11.3431 3 13 3ZM11 6V11C11 12.1046 11.8954 13 13 13C14.1046 13 15 12.1046 15 11V6C15 4.89543 14.1046 4 13 4C11.8954 4 11 4.89543 11 6ZM20 11C20 14.5195 17.386 17.4283 14 17.9207V21H12V17.9207C8.61401 17.4283 6 14.5195 6 11H8C8 13.7614 10.2386 16 13 16C15.7614 16 18 13.7614 18 11H20Z"></path>
+                </svg>
+              )}
+            </button>
+            <button
+              onClick={handleVoiceInput}
+              className={`absolute left-10 p-2 rounded ${
+                isListening
+                  ? "bg-green-700 hover:bg-green-600 text-white"
+                  : "bg-zinc-700 hover:bg-zinc-600 text-zinc-400"
+              }`}
+              title={isListening ? "Stop voice input" : "Start voice input"}
+              style={{ zIndex: 10 }}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -219,7 +489,7 @@ export function ChatControl({
                 className="w-5 h-5"
                 aria-hidden="true"
               >
-                <path d="M16 4C16.5523 4 17 4.44772 17 5V9.2L22.2133 5.55071C22.4395 5.39235 22.7513 5.44737 22.9096 5.6736C22.9684 5.75764 23 5.85774 23 5.96033V18.0397C23 18.3158 22.7761 18.5397 22.5 18.5397C22.3974 18.5397 22.2973 18.5081 22.2133 18.4493L17 14.8V19C17 19.5523 16.5523 20 16 20H2C1.44772 20 1 19.5523 1 19V5C1 4.44772 1.44772 4 2 4H16ZM15 6H3V18H15V6ZM7.4 8.82867C7.47607 8.82867 7.55057 8.85036 7.61475 8.8912L11.9697 11.6625C12.1561 11.7811 12.211 12.0284 12.0924 12.2148C12.061 12.2641 12.0191 12.306 11.9697 12.3375L7.61475 15.1088C7.42837 15.2274 7.18114 15.1725 7.06254 14.9861C7.02169 14.9219 7 14.8474 7 14.7713V9.22867C7 9.00776 7.17909 8.82867 7.4 8.82867ZM21 8.84131L17 11.641V12.359L21 15.1587V8.84131Z"></path>{" "}
+                <path d="M12 14C10.3431 14 9 12.6569 9 11V6C9 4.34315 10.3431 3 12 3C13.6569 3 15 4.34315 15 6V11C15 12.6569 13.6569 14 12 14ZM19 11C19 14.5195 16.386 17.4283 13 17.9207V21H11V17.9207C7.61401 17.4283 5 14.5195 5 11H7C7 13.7614 9.23858 16 12 16C14.7614 16 17 13.7614 17 11H19Z"></path>{" "}
               </svg>
             </button>
             <input
@@ -230,7 +500,7 @@ export function ChatControl({
               onKeyDown={(e) => e.stopPropagation()}
               onKeyUp={(e) => e.stopPropagation()}
               placeholder="Type a command..."
-              className="flex-1 pl-10 p-2 rounded bg-zinc-700 text-white outline-none text-sm"
+              className="flex-1 pl-20 p-2 rounded bg-zinc-700 text-white outline-none text-sm"
             />
           </div>
         </div>

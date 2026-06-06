@@ -1,1 +1,1 @@
-## Source code of bambot.org
+## Source code of Qomics-Robots website

@@ -10,7 +10,7 @@ import { NotificationDialog } from "@/components/NotificationDialog";
 export default function Header() {
   const [showNotification, setShowNotification] = useState(false);
   const [hasNew, setHasNew] = useState(false);
-  const NOTIFICATION_KEY = "bambot-update-2024-05";
+  const NOTIFICATION_KEY = "qomics-robots-update-2024-05";
 
   useEffect(() => {
     if (!localStorage.getItem(NOTIFICATION_KEY)) {
@@ -34,7 +34,7 @@ export default function Header() {
     <>
       <header className="text-white w-full p-5 sm:px-10 flex justify-between items-center fixed top-0 left-0 right-0 z-50">
         <Link href="/">
-            <img src="/favicon.ico" alt="BamBot Logo" className="w-8 h-8" />
+            <img src="/favicon.ico" alt="Qomics-Robots Logo" className="w-8 h-8" />
         </Link>
         <div className="flex  gap-4 items-center">
           <button

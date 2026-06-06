@@ -48,7 +48,7 @@ export default function RobotLoader({ robotName }: RobotLoaderProps) {
   const [jointDetails, setJointDetails] = useState<JointDetails[]>([]);
   const [showControlPanel, setShowControlPanel] = useState(() => {
     const stored = getPanelStateFromLocalStorage("keyboardControl", robotName);
-    return stored !== null ? stored : window.innerWidth >= 900;
+    return stored !== null ? stored : (typeof window !== "undefined" && window.innerWidth >= 900);
   });
   const [showLeaderControl, setShowLeaderControl] = useState(() => {
     return getPanelStateFromLocalStorage("leaderControl", robotName) ?? false;
@@ -98,6 +98,7 @@ export default function RobotLoader({ robotName }: RobotLoaderProps) {
     startRecording,
     stopRecording,
     clearRecordData,
+    syncFromRobot,
   } = useRobotControl(jointDetails, urdfInitJointAngles);
 
   useEffect(() => {
@@ -193,6 +194,7 @@ export default function RobotLoader({ robotName }: RobotLoaderProps) {
         disconnectRobot={disconnectRobot}
         keyboardControlMap={keyboardControlMap}
         compoundMovements={compoundMovements}
+        syncFromRobot={syncFromRobot}
       />
       <ChatControl
         show={showChatControl}

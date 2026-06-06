@@ -75,6 +75,8 @@ export function useRobotControl(
 
   // Store initial positions of servos
   const [initialPositions, setInitialPositions] = useState<number[]>([]);
+  // Store the calibration offset between physical and simulation: physical = sim + offset
+  const [jointOffsets, setJointOffsets] = useState<Record<number, number>>({});
 
   useEffect(() => {
     setJointStates(
@@ -98,6 +100,8 @@ export function useRobotControl(
       await scsServoSDK.connect();
       const newStates = [...jointStates];
       const initialPos: number[] = [];
+      const newOffsets: Record<number, number> = { ...jointOffsets };
+      
       for (let i = 0; i < jointDetails.length; i++) {
         try {
           if (jointDetails[i].jointType === "continuous") {
@@ -110,7 +114,16 @@ export function useRobotControl(
             );
             const positionInDegrees = servoPositionToAngle(servoPosition);
             initialPos.push(positionInDegrees);
-            newStates[i].degrees = positionInDegrees;
+            
+            // Calculate offset assuming the physical robot is currently manually 
+            // posed to match the simulation's current visual state
+            const simAngle = newStates[i].degrees;
+            if (typeof simAngle === "number") {
+              newOffsets[jointDetails[i].servoId] = positionInDegrees - simAngle;
+            }
+
+            // DO NOT update newStates[i].degrees so the simulation stays at its initial position
+            // newStates[i].degrees = positionInDegrees;
 
             // Enable torque for revolute servos
             await scsServoSDK.writeTorqueEnable(jointDetails[i].servoId, true);
@@ -129,9 +142,10 @@ export function useRobotControl(
         }
       }
       setInitialPositions(initialPos);
+      setJointOffsets(newOffsets);
       setJointStates(newStates);
       setIsConnected(true);
-      console.log("Robot connected successfully.");
+      console.log("Robot connected successfully. Offsets:", newOffsets);
     } catch (error) {
       setIsConnected(false);
       alert(error);
@@ -213,6 +227,31 @@ export function useRobotControl(
     };
   }, []);
 
+  // Sync positions from physical robot without moving simulation
+  const syncFromRobot = useCallback(async () => {
+    if (!isConnected) return;
+    const newOffsets: Record<number, number> = { ...jointOffsets };
+    for (let i = 0; i < jointDetails.length; i++) {
+      if (jointDetails[i].jointType === "revolute") {
+        try {
+          const servoPosition = await scsServoSDK.readPosition(jointDetails[i].servoId);
+          const realPositionInDegrees = servoPositionToAngle(servoPosition);
+          
+          const simAngle = jointStates[i].degrees;
+          if (typeof simAngle === "number") {
+             // Calculate the offset between physical world and simulation
+             newOffsets[jointDetails[i].servoId] = realPositionInDegrees - simAngle;
+          }
+        } catch (error) {
+          console.error(`Failed to read position for servo ${jointDetails[i].servoId}:`, error);
+        }
+      }
+    }
+    setJointOffsets(newOffsets);
+    console.log("Calculated joint offsets:", newOffsets);
+    alert("Calibration successful! The simulation has been aligned to the physical robot's current pose.");
+  }, [isConnected, jointStates, jointDetails, jointOffsets]);
+
   // Update revolute joint degrees
   const updateJointDegrees = useCallback(
     async (servoId: number, value: number) => {
@@ -226,16 +265,20 @@ export function useRobotControl(
 
         if (isConnected) {
           try {
-            // Check if value is within the valid range (0-360 degrees)
-            if (value >= 0 && value <= 360) {
-              const servoPosition = degreesToServoPosition(value); // Use utility function
+            // Apply offset
+            const offset = jointOffsets[servoId] || 0;
+            const physicalValue = value + offset;
+            
+            // Physical servos can only go from 0 to 360 degrees
+            if (physicalValue >= 0 && physicalValue <= 360) {
+              const servoPosition = degreesToServoPosition(physicalValue); // Use utility function
               await scsServoSDK.writePosition(
                 servoId,
                 Math.round(servoPosition)
               );
             } else {
               console.warn(
-                `Value ${value} for servo ${servoId} is out of range (0-360). Skipping update.`
+                `Calculated physical value ${physicalValue} (sim: ${value}, offset: ${offset}) for servo ${servoId} is out of hardware range (0-360). Skipping update.`
               );
             }
           } catch (error) {
@@ -304,13 +347,16 @@ export function useRobotControl(
           newStates[jointIndex].degrees = value;
 
           if (isConnected) {
-            if (value >= 0 && value <= 360) {
-              const servoPosition = degreesToServoPosition(value); // Use utility function
+            const offset = jointOffsets[servoId] || 0;
+            const physicalValue = value + offset;
+            
+            if (physicalValue >= 0 && physicalValue <= 360) {
+              const servoPosition = degreesToServoPosition(physicalValue); // Use utility function
               servoPositions[servoId] = Math.round(servoPosition);
               validUpdates.push({ servoId, value }); // Store valid updates
             } else {
               console.warn(
-                `Value ${value} for servo ${servoId} is out of range (0-360). Skipping update in sync write.`
+                `Calculated physical value ${physicalValue} (sim: ${value}, offset: ${offset}) for servo ${servoId} is out of hardware range (0-360). Skipping update in sync write.`
               );
             }
           }
@@ -389,11 +435,11 @@ export function useRobotControl(
     updateJointSpeed,
     updateJointsSpeed,
     setJointDetails,
-    // Recording functions
     isRecording,
     recordData,
     startRecording,
     stopRecording,
     clearRecordData,
+    syncFromRobot, // Export sync function
   };
 }

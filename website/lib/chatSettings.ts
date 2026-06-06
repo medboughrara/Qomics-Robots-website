@@ -3,7 +3,8 @@ const BASE_URL = "base_url";
 const MODEL = "model";
 
 export function getApiKeyFromLocalStorage(): string {
-  return localStorage.getItem(API_KEY) || "";
+  if (typeof window === "undefined") return "aa9e35f0-e90e-480c-8745-d9455a95c5f8";
+  return localStorage.getItem(API_KEY) || "aa9e35f0-e90e-480c-8745-d9455a95c5f8";
 }
 
 export function setApiKeyToLocalStorage(key: string) {
@@ -11,6 +12,7 @@ export function setApiKeyToLocalStorage(key: string) {
 }
 
 export function getBaseURLFromLocalStorage(): string {
+  if (typeof window === "undefined") return "";
   return localStorage.getItem(BASE_URL) || "";
 }
 
@@ -23,6 +25,7 @@ function systemPromptKey(robotName?: string) {
 }
 
 export function getSystemPromptFromLocalStorage(robotName?: string): string {
+  if (typeof window === "undefined") return "";
   return localStorage.getItem(systemPromptKey(robotName)) || "";
 }
 
@@ -34,6 +37,7 @@ export function setSystemPromptToLocalStorage(
 }
 
 export function getModelFromLocalStorage(): string {
+  if (typeof window === "undefined") return "";
   return localStorage.getItem(MODEL) || "";
 }
 

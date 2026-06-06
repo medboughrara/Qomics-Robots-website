@@ -34,6 +34,7 @@ type ControlPanelProps = {
   compoundMovements?: RobotConfig["compoundMovements"]; // Use type from robotConfig
   onHide?: () => void; // 新增 onHide 属性
   show?: boolean; // 新增 show 属性
+  syncFromRobot?: () => Promise<void>;
 };
 
 export function ControlPanel({
@@ -49,6 +50,7 @@ export function ControlPanel({
   disconnectRobot,
   keyboardControlMap, // Destructure new prop
   compoundMovements, // Destructure new prop
+  syncFromRobot,
 }: ControlPanelProps) {
   const [connectionStatus, setConnectionStatus] = useState<
     "idle" | "connecting" | "disconnecting"
@@ -56,6 +58,7 @@ export function ControlPanel({
   const [ref, bounds] = useMeasure();
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [hasDragged, setHasDragged] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     if (bounds.height > 0 && !hasDragged) {
@@ -66,6 +69,10 @@ export function ControlPanel({
       }));
     }
   }, [bounds.height, hasDragged]);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const handleConnect = async () => {
     setConnectionStatus("connecting");
@@ -92,6 +99,8 @@ export function ControlPanel({
   const continuousJoints = jointStates.filter(
     (state) => state.jointType === "continuous"
   );
+
+  if (!mounted) return null;
 
   return (
     <Rnd
@@ -141,27 +150,37 @@ export function ControlPanel({
         )}
 
         {/* Connection Controls */}
-        <div className="mt-4 flex justify-between items-center gap-2">
-          <button
-            onClick={isConnected ? handleDisconnect : handleConnect}
-            disabled={connectionStatus !== "idle"}
-            className={`text-white text-sm px-3 py-1.5 rounded flex-1 ${
-              isConnected
-                ? "bg-red-600 hover:bg-red-500"
-                : "bg-blue-600 hover:bg-blue-500"
-            } ${
-              connectionStatus !== "idle" ? "opacity-50 cursor-not-allowed" : ""
-            }`}
-          >
-            {connectionStatus === "connecting"
-              ? "Connecting..."
-              : connectionStatus === "disconnecting"
-              ? "Disconnecting..."
-              : isConnected
-              ? "Disconnect Robot"
-              : "Connect Follower Robot"}
-          </button>
-          <RobotConnectionHelpDialog />
+        <div className="mt-4 flex flex-col gap-2">
+          <div className="flex justify-between items-center gap-2">
+            <button
+              onClick={isConnected ? handleDisconnect : handleConnect}
+              disabled={connectionStatus !== "idle"}
+              className={`text-white text-sm px-3 py-1.5 rounded flex-1 ${
+                isConnected
+                  ? "bg-red-600 hover:bg-red-500"
+                  : "bg-blue-600 hover:bg-blue-500"
+              } ${
+                connectionStatus !== "idle" ? "opacity-50 cursor-not-allowed" : ""
+              }`}
+            >
+              {connectionStatus === "connecting"
+                ? "Connecting..."
+                : connectionStatus === "disconnecting"
+                ? "Disconnecting..."
+                : isConnected
+                ? "Disconnect Robot"
+                : "Connect Follower Robot"}
+            </button>
+            <RobotConnectionHelpDialog />
+          </div>
+          {isConnected && syncFromRobot && (
+            <button
+              onClick={syncFromRobot}
+              className="text-white text-sm px-3 py-1.5 rounded bg-zinc-700 hover:bg-zinc-600 w-full"
+            >
+              Sync Simulation to Physical Robot
+            </button>
+          )}
         </div>
       </div>
     </Rnd>

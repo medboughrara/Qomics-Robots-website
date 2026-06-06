@@ -21,6 +21,7 @@ const nextConfig = {
     parallelServerBuildTraces: true,
     parallelServerCompiles: true,
   },
+  serverExternalPackages: ["onnxruntime-node", "sharp", "@huggingface/transformers", "kokoro-js"],
 }
 
 mergeConfig(nextConfig, userConfig)
