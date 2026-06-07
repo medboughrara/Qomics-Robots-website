@@ -23,7 +23,7 @@ Bambot makes it easy to simulate, control, and build your own low-cost robots. T
 ## 🌟 Key Features
 
 - **3D Robot Playground**: Interactive simulation using Three.js/React Three Fiber to visualize and test robot movements in the browser.
-- **AI-Powered Controls & Speech**: Control the robot using natural language via an integrated LLM chat panel. The robot features high-quality, human-like voice synthesis directly in the browser (using Kokoro-82M TTS) that executes concurrently with synchronized physical movements.
+- **AI-Powered Controls & Speech**: Control the robot using natural language via an integrated LLM chat panel (supports local options like **Ollama** phi3:latest). The robot features high-quality, human-like voice synthesis directly in the browser (using local **Kokoro-82M TTS**) that executes concurrently with synchronized physical movements.
 - **WebUSB Direct Control (`feetech.js`)**: Connect and send commands directly from Chrome/Edge to Feetech servos (STS/SCS series) without installing external drivers.
 - **Low-Cost Hardware**: Standard designs combining the SO-100 arm and LeKiwi omni-directional base, costing ~ $300 in total.
 
