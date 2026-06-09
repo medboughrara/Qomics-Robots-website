@@ -78,6 +78,55 @@ For more API details, refer to the [SDK Documentation](https://deepwiki.com/timq
 
 ---
 
+## 🎙️ Speech & AI Control Architecture
+
+Bambot integrates interactive speech recognition, natural language reasoning, high-fidelity speech synthesis, and keyboard-event emulation to control both simulated and physical robots.
+
+```mermaid
+graph TD
+    User([User Voice / Text]) --> STT[Speech Recognition<br/>Web Speech API]
+    STT --> CommandRouter{Command Router}
+    User -->|Text Input| CommandRouter
+
+    CommandRouter -->|Heuristic Match| SimpleActions[Local Action Heuristics<br/>Regex Parser]
+    CommandRouter -->|Advanced Query| LLM[LLM / Chat Model<br/>Vercel AI SDK]
+
+    LLM -->|Tool Call| KeyPressTool[keyPress Tool]
+    KeyPressTool --> ActionExecutor[Action Executor<br/>simulateKeyPress]
+    SimpleActions --> ActionExecutor
+
+    LLM -->|Text Response| TTS[TTS Engine]
+    SimpleActions -->|Dynamic Response| TTS
+
+    TTS -->|Kokoro TTS / WebSpeech| Playback[Audio Output]
+    Playback -->|onReady Sync| ActionExecutor
+    ActionExecutor -->|Keyboard Events| Robot[Robot Simulator & Hardware]
+```
+
+### 1. Speech Recognition (STT)
+* **API**: Browser-native Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`).
+* **Implementation**: The mic button in the chat control activates standard voice capture in English (`en-US`), feeding the parsed transcript directly into the command routing pipeline.
+
+### 2. Command Interpretation & Action Routing
+When a command is received, it follows one of two paths:
+* **Local Heuristic Match**: Quick regex parsing identifies simple movement keywords (e.g., *left, right, up, down, forward, backward, open, close*) along with durations (e.g., *2 seconds*, *500ms*). If matched, it generates a predefined dynamic conversational acknowledgment.
+* **Advanced AI Interpretation**: Falls back to the Vercel AI SDK, utilizing OpenAI-compatible endpoints (configured for NVIDIA Nemotron-voicechat by default, or customizable to Ollama). It leverages a dedicated `keyPress` tool (defined with Zod parameters for `key` and `duration`) that the LLM invokes to execute actions.
+
+### 3. Text-to-Speech (TTS)
+To deliver conversational feedback, the system cleans markdown from the output and speaks via:
+* **Kokoro-82M TTS (Primary)**: A high-quality local model run client-side using `kokoro-js` with WebAssembly/ONNX Runtime Web. It generates raw audio buffers dynamically in the browser (voice: `af_heart`) and plays them via the Web Audio API.
+* **Web Speech Synthesis (Fallback)**: Native browser `window.speechSynthesis` using `SpeechSynthesisUtterance`.
+
+### 4. Action Execution & Outputs
+* **Simulated Keyboard Interaction**: Movements are executed by generating standard `KeyboardEvent` instances (`keydown` and `keyup`) dispatched to the browser's `window` context. These virtual keys are intercepted by the 3D playground simulation or physical WebUSB handlers to actuate the robot.
+* **Synchronized Actions**: To mimic realistic behavior, movement execution is held until the audio output triggers its `onReady` (Kokoro) or `onstart` (Web Speech API) callback. This synchronizes the physical robot's movement exactly with its voice synthesis.
+* **System Output**: 
+  1. **Textual**: Rendered messages within the chat panel interface.
+  2. **Auditory**: Synthesized voice response played through the system speakers.
+  3. **Physical/Simulated**: Real-time 3D model animations in the Three.js viewport and/or direct servo commands via WebUSB.
+
+---
+
 ## 🛠️ Hardware & Assembly
 
 For details on the 3D printed parts, electronic components, and full assembly instructions, check out the **[Hardware Guide](file:///d:/bambot/hardware/README.md)**.
